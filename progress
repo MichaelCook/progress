@@ -1,0 +1,204 @@
+#!/usr/bin/python2
+
+# This software is distributed under the "Simplified BSD license":
+#
+# Copyright Michael Cook <michael@waxrat.com>. All rights reserved.
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions are met:
+#
+#    1. Redistributions of source code must retain the above copyright notice,
+#       this list of conditions and the following disclaimer.
+#
+#    2. Redistributions in binary form must reproduce the above copyright
+#       notice, this list of conditions and the following disclaimer in the
+#       documentation and/or other materials provided with the distribution.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+# DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+# FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+# DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+# SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+# CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+# OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+"""
+Usage: %this [options]
+
+Watch processes as they progress through file I/O operations.
+
+Options:
+  -s --period-seconds=n  Time between polls [default: 2]
+  -h --help
+  --debug  Enable debug logging.
+
+"""
+
+# Inspired by https://github.com/Xfennec/progress/
+
+import sys, os, docopt, time
+from stat import *
+
+args = docopt.docopt(__doc__.replace("%this", os.path.basename(sys.argv[0])))
+
+debug = None
+if args["--debug"]:
+    def debug(*args):
+        print >>sys.stderr, ">", " ".join(map(lambda a: str(a), args))
+
+class Process:
+    def __init__(self, command, fds):
+        self.command = command
+        self.fds = fds
+
+class File:
+    def __init__(self, name, pos, size, timestamp):
+        self.name = name
+        self.pos = pos
+        self.size = size
+        self.timestamp = timestamp
+        self.first_pos = pos
+        self.first_size = size
+        self.first_timestamp = timestamp
+        self.shown = False
+
+def get_procs():
+    procs = {}
+    timestamp = time.time()
+    for pid in os.listdir("."):
+        if pid[:1] not in "123456789":
+            continue
+        if debug: debug("==", pid, "==")
+
+        fddir = pid + "/fd/"
+        try:
+            fds = os.listdir(fddir)
+        except OSError, exc:
+            if debug: debug("skip", pid, exc)
+            continue
+
+        try:
+            with open(pid + "/comm") as f:
+                command = f.read().rstrip("\n")
+        except IOError, exc:
+            if debug: debug("skip", pid, exc)
+            continue
+
+        fdmap = {}
+        for fd in fds:
+            try:
+                fdfile = fddir + fd
+                st = os.stat(fdfile)
+                if debug: debug("fd", fd, st)
+
+                name = os.readlink(fdfile)
+                if debug: debug("name", name)
+
+                if not S_ISREG(st.st_mode) and not S_ISBLK(st.st_mode):
+                    if debug: debug("not regular or block", fd)
+                    continue
+
+                size = st.st_size
+                pos = 0
+                with open(pid + "/fdinfo/" + fd, "rt") as f:
+                    for line in f:
+                        if debug: debug("fdinfo:", line.rstrip("\n"))
+                        if line.startswith("pos:"):
+                            pos = int(line[4:])
+                            break
+                if debug: debug("pos", pos, "of", size)
+
+                fdmap[fd, st.st_dev, st.st_ino] = \
+                    File(name=name, pos=pos, size=size, timestamp=timestamp)
+
+            except OSError, exc:
+                if debug: debug("skip", pid, fd, exc)
+
+        procs[pid] = Process(command=command, fds=fdmap)
+    return procs
+
+def percentage(n, d):
+    """Returns a string like "12.3%" from numerator N and denominator D."""
+    if d == 0:
+        return ""
+    return "{0:.1f}%".format(100.0 * n / d)
+
+def gmk(v):
+    """Returns a string like "4.5G" (Giga, Mega, Kilo) from the value V."""
+    v = float(v)
+    if v > 1.5 * 1024 * 1024 * 1024:
+        return "{0:.1f}G".format(v / (1024 * 1024 * 1024))
+    if v > 1.5 * 1024 * 1024:
+        return "{0:.1f}M".format(v / (1024 * 1024))
+    if v > 1.5 * 1024:
+        return "{0:.1f}K".format(v / 1024)
+    return "{0:.1f}".format(v)
+
+def compare_proc(then_proc, now_proc):
+    for (fd, dev, ino), now_fd in now_proc.fds.iteritems():
+        then_fd = then_proc.fds.pop((fd, dev, ino), None)
+        if not then_fd:
+            continue
+        now_fd.first_pos = then_fd.first_pos
+        now_fd.first_size = then_fd.first_size
+        now_fd.first_timestamp = then_fd.first_timestamp
+        now_fd.shown = then_fd.shown
+        if now_fd.size == 0 and then_fd.size == 0:
+            continue
+        if now_fd.pos == then_fd.pos:
+            continue
+        now_fd.shown = True
+
+        rate = "-"
+        more_time = "-"
+        elapsed = now_fd.timestamp - now_fd.first_timestamp
+        if elapsed != 0:
+            bytes_per_sec = (now_fd.pos - now_fd.first_pos) / elapsed
+            rate = gmk(bytes_per_sec)
+            more_bytes = now_fd.size - now_fd.pos
+            if more_bytes > 0:
+                s = int(more_bytes / bytes_per_sec)
+                more_time = "{0:d}:{1:02d}".format(s / 60, s % 60)
+
+        print "{perc} {pos} / {size} {rate}B/s {more_time} {name} [{command}]" \
+            .format(perc=percentage(now_fd.pos, now_fd.size),
+                    rate=rate,
+                    more_time=more_time,
+                    pos=gmk(now_fd.pos),
+                    size=gmk(now_fd.size),
+                    name=os.path.basename(now_fd.name),
+                    command=now_proc.command)
+        if now_fd.size != then_fd.size:
+            print "size:", now_fd.size, now_fd.size - then_fd.size
+
+def compare_procs(then_procs, now_procs):
+    for pid, now_proc in now_procs.iteritems():
+        then_proc = then_procs.pop(pid, None)
+        if then_proc:
+            compare_proc(then_proc, now_proc)
+
+    # Check for FDs that we previously reported on that are now gone.
+    for pid, then_proc in then_procs.iteritems():
+        for (fd, dev, ino), then_fd in then_proc.fds.iteritems():
+            if then_fd.shown:
+                print "{name} [{command}] - CLOSED" \
+                    .format(name=os.path.basename(then_fd.name),
+                            command=then_proc.command)
+
+def main():
+    sleep = float(args["--period-seconds"])
+    now_procs = get_procs()
+    while True:
+        time.sleep(sleep)
+        then_procs = now_procs
+        now_procs = get_procs()
+        compare_procs(then_procs, now_procs)
+
+os.chdir("/proc")
+try:
+    main()
+except KeyboardInterrupt:
+    pass
