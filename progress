@@ -171,8 +171,12 @@ def compare_proc(then_proc, now_proc):
                     size=gmk(now_fd.size),
                     name=os.path.basename(now_fd.name),
                     command=now_proc.command)
-        if now_fd.size != then_fd.size:
-            print "size:", now_fd.size, now_fd.size - then_fd.size
+    # Any FDs still in then_proc have been closed.
+    for (fd, dev, ino), then_fd in then_proc.fds.iteritems():
+        if then_fd.shown:
+            print "CLOSED - {name} [{command}]" \
+                .format(name=os.path.basename(then_fd.name),
+                        command=then_proc.command)
 
 def compare_procs(then_procs, now_procs):
     for pid, now_proc in now_procs.iteritems():
@@ -180,11 +184,12 @@ def compare_procs(then_procs, now_procs):
         if then_proc:
             compare_proc(then_proc, now_proc)
 
-    # Check for FDs that we previously reported on that are now gone.
+    # Any processes still in then_procs no longer exist.
+    # Check for FDs that we previously reported but are now gone.
     for pid, then_proc in then_procs.iteritems():
         for (fd, dev, ino), then_fd in then_proc.fds.iteritems():
             if then_fd.shown:
-                print "{name} [{command}] - CLOSED" \
+                print "CLOSED - {name} [{command}]" \
                     .format(name=os.path.basename(then_fd.name),
                             command=then_proc.command)
 
