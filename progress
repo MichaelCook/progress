@@ -94,12 +94,12 @@ def get_procs():
                 st = os.stat(fdfile)
                 if debug: debug("fd", fd, st)
 
-                name = os.readlink(fdfile)
-                if debug: debug("name", name)
-
                 if not S_ISREG(st.st_mode) and not S_ISBLK(st.st_mode):
                     if debug: debug("not regular or block", fd)
                     continue
+
+                name = os.readlink(fdfile)
+                if debug: debug("name", name)
 
                 size = st.st_size
                 pos = 0
@@ -115,6 +115,9 @@ def get_procs():
                     File(name=name, pos=pos, size=size, timestamp=timestamp)
 
             except OSError, exc:
+                if debug: debug("skip", pid, fd, exc)
+
+            except IOError, exc:
                 if debug: debug("skip", pid, fd, exc)
 
         procs[pid] = Process(command=command, fds=fdmap)
