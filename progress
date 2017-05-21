@@ -1,4 +1,4 @@
-#!/usr/bin/python2
+#!/usr/bin/python2.7
 
 # This software is distributed under the "Simplified BSD license":
 #
@@ -39,7 +39,7 @@ Options:
 
 # Inspired by https://github.com/Xfennec/progress/
 
-import sys, os, docopt, time
+import sys, os, docopt, time, signal
 from stat import *
 
 args = docopt.docopt(__doc__.replace("%this", os.path.basename(sys.argv[0])))
@@ -196,17 +196,15 @@ def compare_procs(then_procs, now_procs):
                     .format(name=os.path.basename(then_fd.name),
                             command=then_proc.command)
 
-def main():
-    sleep = float(args["--period-seconds"])
-    now_procs = get_procs()
-    while True:
-        time.sleep(sleep)
-        then_procs = now_procs
-        now_procs = get_procs()
-        compare_procs(then_procs, now_procs)
+# Don't catch SIGINT to generate KeyboardInterrupt.
+signal.signal(signal.SIGINT, signal.SIG_DFL)
 
 os.chdir("/proc")
-try:
-    main()
-except KeyboardInterrupt:
-    pass
+
+sleep = float(args["--period-seconds"])
+now_procs = get_procs()
+while True:
+    time.sleep(sleep)
+    then_procs = now_procs
+    now_procs = get_procs()
+    compare_procs(then_procs, now_procs)
