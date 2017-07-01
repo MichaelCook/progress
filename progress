@@ -39,7 +39,11 @@ Options:
 
 # Inspired by https://github.com/Xfennec/progress/
 
-import sys, os, docopt, time, signal
+import sys
+import os
+import docopt
+import time
+import signal
 from stat import *
 
 args = docopt.docopt(__doc__.replace("%this", os.path.basename(sys.argv[0])))
@@ -48,6 +52,9 @@ debug = None
 if args["--debug"]:
     def debug(*args):
         print >>sys.stderr, ">", " ".join(map(lambda a: str(a), args))
+
+def put(fmt, **kwargs):
+    print time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()), fmt.format(**kwargs)
 
 class Process:
     def __init__(self, command, fds):
@@ -69,7 +76,7 @@ def get_procs():
     procs = {}
     timestamp = time.time()
     for pid in os.listdir("."):
-        if pid[:1] not in "123456789":
+        if not pid[0].isdigit():
             continue
         if debug: debug("==", pid, "==")
 
@@ -166,20 +173,20 @@ def compare_proc(then_proc, now_proc):
                 s = int(more_bytes / bytes_per_sec)
                 more_time = "{0:d}:{1:02d}".format(s / 60, s % 60)
 
-        print "{perc} {pos} / {size} {rate}B/s {more_time} {name} [{command}]" \
-            .format(perc=percentage(now_fd.pos, now_fd.size),
-                    rate=rate,
-                    more_time=more_time,
-                    pos=gmk(now_fd.pos),
-                    size=gmk(now_fd.size),
-                    name=os.path.basename(now_fd.name),
-                    command=now_proc.command)
+        put("{perc} {pos} / {size} {rate}B/s {more_time} {name} [{command}]",
+            perc=percentage(now_fd.pos, now_fd.size),
+            rate=rate,
+            more_time=more_time,
+            pos=gmk(now_fd.pos),
+            size=gmk(now_fd.size),
+            name=os.path.basename(now_fd.name),
+            command=now_proc.command)
     # Any FDs still in then_proc have been closed.
     for (fd, dev, ino), then_fd in then_proc.fds.iteritems():
         if then_fd.shown:
-            print "CLOSED - {name} [{command}]" \
-                .format(name=os.path.basename(then_fd.name),
-                        command=then_proc.command)
+            put("CLOSED - {name} [{command}]",
+                name=os.path.basename(then_fd.name),
+                command=then_proc.command)
 
 def compare_procs(then_procs, now_procs):
     for pid, now_proc in now_procs.iteritems():
@@ -192,9 +199,9 @@ def compare_procs(then_procs, now_procs):
     for pid, then_proc in then_procs.iteritems():
         for (fd, dev, ino), then_fd in then_proc.fds.iteritems():
             if then_fd.shown:
-                print "CLOSED - {name} [{command}]" \
-                    .format(name=os.path.basename(then_fd.name),
-                            command=then_proc.command)
+                put("CLOSED - {name} [{command}]",
+                    name=os.path.basename(then_fd.name),
+                    command=then_proc.command)
 
 # Don't catch SIGINT to generate KeyboardInterrupt.
 signal.signal(signal.SIGINT, signal.SIG_DFL)
