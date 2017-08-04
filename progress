@@ -167,11 +167,12 @@ def compare_proc(then_proc, now_proc):
         elapsed = now_fd.timestamp - now_fd.first_timestamp
         if elapsed != 0:
             bytes_per_sec = (now_fd.pos - now_fd.first_pos) / elapsed
-            rate = gmk(bytes_per_sec)
-            more_bytes = now_fd.size - now_fd.pos
-            if more_bytes > 0:
-                s = int(more_bytes / bytes_per_sec)
-                more_time = "{0:d}:{1:02d}".format(s / 60, s % 60)
+            if bytes_per_sec > 0:
+                rate = gmk(bytes_per_sec)
+                more_bytes = now_fd.size - now_fd.pos
+                if more_bytes > 0:
+                    s = int(more_bytes / bytes_per_sec)
+                    more_time = "{0:d}:{1:02d}".format(s / 60, s % 60)
 
         put("{perc} {pos} / {size} {rate}B/s {more_time} {name} [{command}]",
             perc=percentage(now_fd.pos, now_fd.size),
