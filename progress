@@ -25,31 +25,33 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-"""
-Usage: %this [options]
-
-Watch processes as they progress through file I/O operations.
-
-Options:
-  -s --period-seconds=n  Time between polls [default: 2]
-  -h --help
-  --debug  Enable debug logging.
-
-"""
-
-# Inspired by https://github.com/Xfennec/progress/
-
 import sys
 import os
-import docopt
+import argparse
 import time
 import signal
 from stat import *
 
-args = docopt.docopt(__doc__.replace("%this", os.path.basename(sys.argv[0])))
+# ----------------------------------------------------------------------------
+
+parser = argparse.ArgumentParser(description="""
+Watch processes as they progress through file I/O operations.
+""")
+# Inspired by https://github.com/Xfennec/progress/
+parser.add_argument("--seconds", "-s",
+                    metavar="N",
+                    default=2,
+                    help="Time between polls")
+parser.add_argument("--debug",
+                    help="Enable debug logging",
+                    action="store_true")
+args = parser.parse_args()
+del parser
+
+# ----------------------------------------------------------------------------
 
 debug = None
-if args["--debug"]:
+if args.debug:
     def debug(*args):
         print >>sys.stderr, ">", " ".join(map(lambda a: str(a), args))
 
@@ -209,7 +211,7 @@ signal.signal(signal.SIGINT, signal.SIG_DFL)
 
 os.chdir("/proc")
 
-sleep = float(args["--period-seconds"])
+sleep = float(args.seconds)
 now_procs = get_procs()
 while True:
     time.sleep(sleep)
