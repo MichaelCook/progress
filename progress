@@ -135,8 +135,11 @@ def get_procs():
 def percentage(n, d):
     """Returns a string like "12.3%" from numerator N and denominator D."""
     if d == 0:
-        return ""
-    return "{0:.1f}%".format(100.0 * n / d)
+        return "-"
+    r = "{0:.1f}%".format(100.0 * n / d)
+    if r == "100.0%":
+        r = "100%"
+    return r
 
 def gmk(v):
     """Returns a string like "4.5G" (Giga, Mega, Kilo) from the value V."""
@@ -170,13 +173,13 @@ def compare_proc(then_proc, now_proc):
         if elapsed != 0:
             bytes_per_sec = (now_fd.pos - now_fd.first_pos) / elapsed
             if bytes_per_sec > 0:
-                rate = gmk(bytes_per_sec)
+                rate = gmk(bytes_per_sec) + "B/s"
                 more_bytes = now_fd.size - now_fd.pos
                 if more_bytes > 0:
                     s = int(more_bytes / bytes_per_sec)
                     more_time = "{0:d}:{1:02d}".format(s / 60, s % 60)
 
-        put("{perc} {pos} / {size} {rate}B/s {more_time} {name} [{command}]",
+        put("{perc} {pos} / {size} {rate} {more_time} {name} [{command}]",
             perc=percentage(now_fd.pos, now_fd.size),
             rate=rate,
             more_time=more_time,
