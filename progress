@@ -1,4 +1,4 @@
-#!/usr/bin/python2.7
+#!/usr/bin/python3
 
 # This software is distributed under the "Simplified BSD license":
 #
@@ -28,6 +28,7 @@
 import sys
 import os
 import argparse
+import logging
 import time
 import signal
 from stat import *
@@ -45,18 +46,17 @@ parser.add_argument("--seconds", "-s",
 parser.add_argument("--debug",
                     help="Enable debug logging",
                     action="store_true")
-args = parser.parse_args()
+opts = parser.parse_args()
 del parser
 
 # ----------------------------------------------------------------------------
 
-debug = None
-if args.debug:
-    def debug(*args):
-        print >>sys.stderr, ">", " ".join(map(lambda a: str(a), args))
+logging.basicConfig(level=logging.DEBUG if opts.debug else logging.INFO,
+                    format='%(name)s: %(levelname)s: %(message)s')
+logger = logging.getLogger(os.path.basename(sys.argv[0]))
 
 def put(fmt, **kwargs):
-    print time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()), fmt.format(**kwargs)
+    print(time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()), fmt.format(**kwargs))
 
 class Process:
     def __init__(self, command, fds):
@@ -80,20 +80,20 @@ def get_procs():
     for pid in os.listdir("."):
         if not pid[0].isdigit():
             continue
-        if debug: debug("==", pid, "==")
+        logger.debug("==", pid, "==")
 
         fddir = pid + "/fd/"
         try:
             fds = os.listdir(fddir)
-        except OSError, exc:
-            if debug: debug("skip", pid, exc)
+        except OSError as exc:
+            logger.debug("skip", pid, exc)
             continue
 
         try:
             with open(pid + "/comm") as f:
                 command = f.read().rstrip("\n")
-        except IOError, exc:
-            if debug: debug("skip", pid, exc)
+        except IOError as exc:
+            logger.debug("skip", pid, exc)
             continue
 
         fdmap = {}
@@ -101,33 +101,33 @@ def get_procs():
             try:
                 fdfile = fddir + fd
                 st = os.stat(fdfile)
-                if debug: debug("fd", fd, st)
+                logger.debug("fd", fd, st)
 
                 if not S_ISREG(st.st_mode) and not S_ISBLK(st.st_mode):
-                    if debug: debug("not regular or block", fd)
+                    logger.debug("not regular or block", fd)
                     continue
 
                 name = os.readlink(fdfile)
-                if debug: debug("name", name)
+                logger.debug("name", name)
 
                 size = st.st_size
                 pos = 0
                 with open(pid + "/fdinfo/" + fd, "rt") as f:
                     for line in f:
-                        if debug: debug("fdinfo:", line.rstrip("\n"))
+                        logger.debug("fdinfo:", line.rstrip("\n"))
                         if line.startswith("pos:"):
                             pos = int(line[4:])
                             break
-                if debug: debug("pos", pos, "of", size)
+                logger.debug("pos", pos, "of", size)
 
                 fdmap[fd, st.st_dev, st.st_ino] = \
                     File(name=name, pos=pos, size=size, timestamp=timestamp)
 
-            except OSError, exc:
-                if debug: debug("skip", pid, fd, exc)
+            except OSError as exc:
+                logger.debug("skip", pid, fd, exc)
 
-            except IOError, exc:
-                if debug: debug("skip", pid, fd, exc)
+            except IOError as exc:
+                logger.debug("skip", pid, fd, exc)
 
         procs[pid] = Process(command=command, fds=fdmap)
     return procs
@@ -153,7 +153,7 @@ def gmk(v):
     return "{0:.1f}".format(v)
 
 def compare_proc(then_proc, now_proc):
-    for (fd, dev, ino), now_fd in now_proc.fds.iteritems():
+    for (fd, dev, ino), now_fd in now_proc.fds.items():
         then_fd = then_proc.fds.pop((fd, dev, ino), None)
         if not then_fd:
             continue
@@ -177,7 +177,7 @@ def compare_proc(then_proc, now_proc):
                 more_bytes = now_fd.size - now_fd.pos
                 if more_bytes > 0:
                     s = int(more_bytes / bytes_per_sec)
-                    more_time = "{0:d}:{1:02d}".format(s / 60, s % 60)
+                    more_time = "{0:d}:{1:02d}".format(s // 60, s % 60)
 
         put("{perc} {pos} / {size} {rate} {more_time} {name} [{command}]",
             perc=percentage(now_fd.pos, now_fd.size),
@@ -188,22 +188,22 @@ def compare_proc(then_proc, now_proc):
             name=os.path.basename(now_fd.name),
             command=now_proc.command)
     # Any FDs still in then_proc have been closed.
-    for (fd, dev, ino), then_fd in then_proc.fds.iteritems():
+    for (fd, dev, ino), then_fd in then_proc.fds.items():
         if then_fd.shown:
             put("CLOSED - {name} [{command}]",
                 name=os.path.basename(then_fd.name),
                 command=then_proc.command)
 
 def compare_procs(then_procs, now_procs):
-    for pid, now_proc in now_procs.iteritems():
+    for pid, now_proc in now_procs.items():
         then_proc = then_procs.pop(pid, None)
         if then_proc:
             compare_proc(then_proc, now_proc)
 
     # Any processes still in then_procs no longer exist.
     # Check for FDs that we previously reported but are now gone.
-    for pid, then_proc in then_procs.iteritems():
-        for (fd, dev, ino), then_fd in then_proc.fds.iteritems():
+    for pid, then_proc in then_procs.items():
+        for (fd, dev, ino), then_fd in then_proc.fds.items():
             if then_fd.shown:
                 put("CLOSED - {name} [{command}]",
                     name=os.path.basename(then_fd.name),
@@ -214,7 +214,7 @@ signal.signal(signal.SIGINT, signal.SIG_DFL)
 
 os.chdir("/proc")
 
-sleep = float(args.seconds)
+sleep = float(opts.seconds)
 now_procs = get_procs()
 while True:
     time.sleep(sleep)
