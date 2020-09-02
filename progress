@@ -1,4 +1,4 @@
-#!/usr/bin/python3
+#!/usr/bin/env python3
 
 # This software is distributed under the "Simplified BSD license":
 #
@@ -31,7 +31,8 @@ import argparse
 import logging
 import time
 import signal
-from stat import *
+from stat import S_ISREG, S_ISBLK
+from mcook import gmk
 
 # ----------------------------------------------------------------------------
 
@@ -46,14 +47,14 @@ parser.add_argument("--seconds", "-s",
 parser.add_argument("--debug",
                     help="Enable debug logging",
                     action="store_true")
-opts = parser.parse_args()
+OPTS = parser.parse_args()
 del parser
 
 # ----------------------------------------------------------------------------
 
-logging.basicConfig(level=logging.DEBUG if opts.debug else logging.INFO,
+logging.basicConfig(level=logging.DEBUG if OPTS.debug else logging.INFO,
                     format='%(name)s: %(levelname)s: %(message)s')
-logger = logging.getLogger(os.path.basename(sys.argv[0]))
+LOGGER = logging.getLogger(os.path.basename(sys.argv[0]))
 
 def put(fmt, **kwargs):
     print(time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()), fmt.format(**kwargs))
@@ -80,20 +81,20 @@ def get_procs():
     for pid in os.listdir("."):
         if not pid[0].isdigit():
             continue
-        logger.debug("==", pid, "==")
+        LOGGER.debug("== %s ==", pid)
 
         fddir = pid + "/fd/"
         try:
             fds = os.listdir(fddir)
         except OSError as exc:
-            logger.debug("skip", pid, exc)
+            LOGGER.debug("skip %s %s", pid, exc)
             continue
 
         try:
             with open(pid + "/comm") as f:
                 command = f.read().rstrip("\n")
         except IOError as exc:
-            logger.debug("skip", pid, exc)
+            LOGGER.debug("skip %s %s", pid, exc)
             continue
 
         fdmap = {}
@@ -101,56 +102,44 @@ def get_procs():
             try:
                 fdfile = fddir + fd
                 st = os.stat(fdfile)
-                logger.debug("fd", fd, st)
+                LOGGER.debug("fd %s %s", fd, st)
 
                 if not S_ISREG(st.st_mode) and not S_ISBLK(st.st_mode):
-                    logger.debug("not regular or block", fd)
+                    LOGGER.debug("not regular or block %s", fd)
                     continue
 
                 name = os.readlink(fdfile)
-                logger.debug("name", name)
+                LOGGER.debug("name %s", name)
 
                 size = st.st_size
                 pos = 0
                 with open(pid + "/fdinfo/" + fd, "rt") as f:
                     for line in f:
-                        logger.debug("fdinfo:", line.rstrip("\n"))
+                        LOGGER.debug("fdinfo: %r", line)
                         if line.startswith("pos:"):
                             pos = int(line[4:])
                             break
-                logger.debug("pos", pos, "of", size)
+                LOGGER.debug("pos %s of %s", pos, size)
 
                 fdmap[fd, st.st_dev, st.st_ino] = \
                     File(name=name, pos=pos, size=size, timestamp=timestamp)
 
             except OSError as exc:
-                logger.debug("skip", pid, fd, exc)
-
-            except IOError as exc:
-                logger.debug("skip", pid, fd, exc)
+                LOGGER.debug("skip %s %s %s", pid, fd, exc)
 
         procs[pid] = Process(command=command, fds=fdmap)
     return procs
 
 def percentage(n, d):
-    """Returns a string like "12.3%" from numerator N and denominator D."""
+    """
+    Returns a string like "12.3%" from numerator N and denominator D
+    """
     if d == 0:
         return "-"
     r = "{0:.1f}%".format(100.0 * n / d)
     if r == "100.0%":
         r = "100%"
     return r
-
-def gmk(v):
-    """Returns a string like "4.5G" (Giga, Mega, Kilo) from the value V."""
-    v = float(v)
-    if v > 1.5 * 1024 * 1024 * 1024:
-        return "{0:.1f}G".format(v / (1024 * 1024 * 1024))
-    if v > 1.5 * 1024 * 1024:
-        return "{0:.1f}M".format(v / (1024 * 1024))
-    if v > 1.5 * 1024:
-        return "{0:.1f}K".format(v / 1024)
-    return "{0:.1f}".format(v)
 
 def compare_proc(then_proc, now_proc):
     for (fd, dev, ino), now_fd in now_proc.fds.items():
@@ -203,21 +192,24 @@ def compare_procs(then_procs, now_procs):
     # Any processes still in then_procs no longer exist.
     # Check for FDs that we previously reported but are now gone.
     for pid, then_proc in then_procs.items():
-        for (fd, dev, ino), then_fd in then_proc.fds.items():
+        for _, then_fd in then_proc.fds.items():
             if then_fd.shown:
                 put("CLOSED - {name} [{command}]",
                     name=os.path.basename(then_fd.name),
                     command=then_proc.command)
 
-# Don't catch SIGINT to generate KeyboardInterrupt.
-signal.signal(signal.SIGINT, signal.SIG_DFL)
+def main():
+    # Don't catch SIGINT to generate KeyboardInterrupt.
+    signal.signal(signal.SIGINT, signal.SIG_DFL)
 
-os.chdir("/proc")
+    os.chdir("/proc")
 
-sleep = float(opts.seconds)
-now_procs = get_procs()
-while True:
-    time.sleep(sleep)
-    then_procs = now_procs
+    sleep = float(OPTS.seconds)
     now_procs = get_procs()
-    compare_procs(then_procs, now_procs)
+    while True:
+        time.sleep(sleep)
+        then_procs = now_procs
+        now_procs = get_procs()
+        compare_procs(then_procs, now_procs)
+
+main()
