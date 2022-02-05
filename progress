@@ -33,6 +33,7 @@ import time
 import signal
 from stat import S_ISREG, S_ISBLK
 from mcook import gmk
+from typing import Final, List, Dict, Tuple
 
 # ----------------------------------------------------------------------------
 
@@ -47,25 +48,20 @@ parser.add_argument("--seconds", "-s",
 parser.add_argument("--debug",
                     help="Enable debug logging",
                     action="store_true")
-OPTS = parser.parse_args()
+OPTS: Final = parser.parse_args()
 del parser
 
 # ----------------------------------------------------------------------------
 
 logging.basicConfig(level=logging.DEBUG if OPTS.debug else logging.INFO,
                     format='%(name)s: %(levelname)s: %(message)s')
-LOGGER = logging.getLogger(os.path.basename(sys.argv[0]))
+LOGGER: Final = logging.getLogger(os.path.basename(sys.argv[0]))
 
-def put(fmt, **kwargs):
+def put(fmt: str, **kwargs) -> None:
     print(time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()), fmt.format(**kwargs))
 
-class Process:
-    def __init__(self, command, fds):
-        self.command = command
-        self.fds = fds
-
 class File:
-    def __init__(self, name, pos, size, timestamp):
+    def __init__(self, name: str, pos: int, size: int, timestamp: float) -> None:
         self.name = name
         self.pos = pos
         self.size = size
@@ -75,8 +71,17 @@ class File:
         self.first_timestamp = timestamp
         self.shown = False
 
-def get_procs():
-    procs = {}
+Fds = Dict[Tuple[str, int, int], File]
+
+class Process:
+    def __init__(self, command: str, fds: Fds) -> None:
+        self.command = command
+        self.fds = fds
+
+Procs = Dict[int, Process]
+
+def get_procs() -> Procs:
+    procs: Procs = {}
     timestamp = time.time()
     for pid in os.listdir("."):
         if not pid[0].isdigit():
@@ -127,10 +132,10 @@ def get_procs():
             except OSError as exc:
                 LOGGER.debug("skip %s %s %s", pid, fd, exc)
 
-        procs[pid] = Process(command=command, fds=fdmap)
+        procs[int(pid)] = Process(command=command, fds=fdmap)
     return procs
 
-def percentage(n, d):
+def percentage(n: int, d: int) -> str:
     """
     Returns a string like "12.3%" from numerator N and denominator D
     """
@@ -141,7 +146,7 @@ def percentage(n, d):
         r = "100%"
     return r
 
-def compare_proc(then_proc, now_proc):
+def compare_proc(then_proc: Process, now_proc: Process) -> None:
     for (fd, dev, ino), now_fd in now_proc.fds.items():
         then_fd = then_proc.fds.pop((fd, dev, ino), None)
         if not then_fd:
@@ -183,7 +188,7 @@ def compare_proc(then_proc, now_proc):
                 name=os.path.basename(then_fd.name),
                 command=then_proc.command)
 
-def compare_procs(then_procs, now_procs):
+def compare_procs(then_procs: Procs, now_procs: Procs) -> None:
     for pid, now_proc in now_procs.items():
         then_proc = then_procs.pop(pid, None)
         if then_proc:
@@ -194,11 +199,11 @@ def compare_procs(then_procs, now_procs):
     for pid, then_proc in then_procs.items():
         for _, then_fd in then_proc.fds.items():
             if then_fd.shown:
-                put("CLOSED - {name} [{command}]",
+                put('CLOSED - {name} [{command}]',
                     name=os.path.basename(then_fd.name),
                     command=then_proc.command)
 
-def main():
+def main() -> None:
     # Don't catch SIGINT to generate KeyboardInterrupt.
     signal.signal(signal.SIGINT, signal.SIG_DFL)
 
