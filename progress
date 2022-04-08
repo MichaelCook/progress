@@ -33,7 +33,7 @@ import time
 import signal
 from stat import S_ISREG, S_ISBLK
 from mcook import gmk
-from typing import Final, List, Dict, Tuple
+from typing import Final, Dict, Tuple, Any
 
 # ----------------------------------------------------------------------------
 
@@ -57,7 +57,7 @@ logging.basicConfig(level=logging.DEBUG if OPTS.debug else logging.INFO,
                     format='%(name)s: %(levelname)s: %(message)s')
 LOGGER: Final = logging.getLogger(os.path.basename(sys.argv[0]))
 
-def put(fmt: str, **kwargs) -> None:
+def put(fmt: str, **kwargs: Any) -> None:
     print(time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()), fmt.format(**kwargs))
 
 class File:
