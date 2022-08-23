@@ -25,40 +25,19 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-import sys
 import os
-import argparse
 import logging
 import time
 import signal
+from typing import Any
 from stat import S_ISREG, S_ISBLK
+import click
 from mcook import gmk
-from typing import Final, Dict, Tuple, Any
 
-# ----------------------------------------------------------------------------
+Lines = list[str]
 
-parser = argparse.ArgumentParser(description="""
-Watch processes as they progress through file I/O operations.
-""")
-# Inspired by https://github.com/Xfennec/progress/
-parser.add_argument("--seconds", "-s",
-                    metavar="N",
-                    default=2,
-                    help="Time between polls")
-parser.add_argument("--debug",
-                    help="Enable debug logging",
-                    action="store_true")
-OPTS: Final = parser.parse_args()
-del parser
-
-# ----------------------------------------------------------------------------
-
-logging.basicConfig(level=logging.DEBUG if OPTS.debug else logging.INFO,
-                    format='%(name)s: %(levelname)s: %(message)s')
-LOGGER: Final = logging.getLogger(os.path.basename(sys.argv[0]))
-
-def put(fmt: str, **kwargs: Any) -> None:
-    print(time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()), fmt.format(**kwargs))
+def put(lines: Lines, fmt: str, **kwargs: Any) -> None:
+    lines.append(f'{time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())} {fmt.format(**kwargs)}')
 
 class File:
     def __init__(self, name: str, pos: int, size: int, timestamp: float) -> None:
@@ -71,35 +50,35 @@ class File:
         self.first_timestamp = timestamp
         self.shown = False
 
-Fds = Dict[Tuple[str, int, int], File]
+Fds = dict[tuple[str, int, int], File]
 
 class Process:
     def __init__(self, command: str, fds: Fds) -> None:
         self.command = command
         self.fds = fds
 
-Procs = Dict[int, Process]
+Procs = dict[int, Process]
 
 def get_procs() -> Procs:
     procs: Procs = {}
     timestamp = time.time()
-    for pid in os.listdir("."):
+    for pid in os.listdir('.'):
         if not pid[0].isdigit():
             continue
-        LOGGER.debug("== %s ==", pid)
+        logging.debug('== %s ==', pid)
 
-        fddir = pid + "/fd/"
+        fddir = pid + '/fd/'
         try:
             fds = os.listdir(fddir)
         except OSError as exc:
-            LOGGER.debug("skip %s %s", pid, exc)
+            logging.debug('skip %s %s', pid, exc)
             continue
 
         try:
-            with open(pid + "/comm") as f:
-                command = f.read().rstrip("\n")
+            with open(f'{pid}/comm', encoding='utf-8') as f:
+                command = f.read().rstrip('\n')
         except IOError as exc:
-            LOGGER.debug("skip %s %s", pid, exc)
+            logging.debug('skip %s %s', pid, exc)
             continue
 
         fdmap = {}
@@ -107,46 +86,47 @@ def get_procs() -> Procs:
             try:
                 fdfile = fddir + fd
                 st = os.stat(fdfile)
-                LOGGER.debug("fd %s %s", fd, st)
+                logging.debug('fd %s %s', fd, st)
 
-                if not S_ISREG(st.st_mode) and not S_ISBLK(st.st_mode):
-                    LOGGER.debug("not regular or block %s", fd)
+                if not (S_ISREG(st.st_mode) or not S_ISBLK(st.st_mode)):
+                    logging.debug('not regular or block %s', fd)
                     continue
 
                 name = os.readlink(fdfile)
-                LOGGER.debug("name %s", name)
+                logging.debug('name %s', name)
 
                 size = st.st_size
                 pos = 0
-                with open(pid + "/fdinfo/" + fd, "rt") as f:
+                with open(f'{pid}/fdinfo/{fd}', 'rt', encoding='utf-8') as f:
                     for line in f:
-                        LOGGER.debug("fdinfo: %r", line)
-                        if line.startswith("pos:"):
+                        logging.debug('fdinfo: %r', line)
+                        if line.startswith('pos:'):
                             pos = int(line[4:])
                             break
-                LOGGER.debug("pos %s of %s", pos, size)
+                logging.debug('pos %s of %s', pos, size)
 
                 fdmap[fd, st.st_dev, st.st_ino] = \
                     File(name=name, pos=pos, size=size, timestamp=timestamp)
 
             except OSError as exc:
-                LOGGER.debug("skip %s %s %s", pid, fd, exc)
+                logging.debug('skip %s %s %s', pid, fd, exc)
 
         procs[int(pid)] = Process(command=command, fds=fdmap)
     return procs
 
 def percentage(n: int, d: int) -> str:
     """
-    Returns a string like "12.3%" from numerator N and denominator D
+    Returns a string like '12.3%' from numerator N and denominator D
     """
     if d == 0:
-        return "-"
-    r = "{0:.1f}%".format(100.0 * n / d)
-    if r == "100.0%":
-        r = "100%"
+        return '-'
+    per = 100.0 * n / d
+    r = f'{per:.1f}%'
+    if r == '100.0%':
+        r = '100%'
     return r
 
-def compare_proc(then_proc: Process, now_proc: Process) -> None:
+def compare_proc(lines: Lines, then_proc: Process, now_proc: Process) -> None:
     for (fd, dev, ino), now_fd in now_proc.fds.items():
         then_fd = then_proc.fds.pop((fd, dev, ino), None)
         if not then_fd:
@@ -161,19 +141,22 @@ def compare_proc(then_proc: Process, now_proc: Process) -> None:
             continue
         now_fd.shown = True
 
-        rate = "-"
-        more_time = "-"
+        rate = '-'
+        more_time = '-'
         elapsed = now_fd.timestamp - now_fd.first_timestamp
         if elapsed != 0:
             bytes_per_sec = (now_fd.pos - now_fd.first_pos) / elapsed
             if bytes_per_sec > 0:
-                rate = gmk(bytes_per_sec) + "B/s"
+                rate = gmk(bytes_per_sec) + 'B/s'
                 more_bytes = now_fd.size - now_fd.pos
                 if more_bytes > 0:
                     s = int(more_bytes / bytes_per_sec)
-                    more_time = "{0:d}:{1:02d}".format(s // 60, s % 60)
+                    more_time = f'{s // 60:d}:{s % 60:02d}'
 
-        put("{perc} {pos} / {size} {rate} {more_time} {name} [{command}]",
+        if now_fd.pos == now_fd.size:
+            continue
+
+        put(lines, '{perc} {pos} / {size} {rate} {more_time} {name} [{command}]',
             perc=percentage(now_fd.pos, now_fd.size),
             rate=rate,
             more_time=more_time,
@@ -184,32 +167,48 @@ def compare_proc(then_proc: Process, now_proc: Process) -> None:
     # Any FDs still in then_proc have been closed.
     for (fd, dev, ino), then_fd in then_proc.fds.items():
         if then_fd.shown:
-            put("CLOSED - {name} [{command}]",
+            put(lines, 'CLOSED - {name} [{command}]',
                 name=os.path.basename(then_fd.name),
                 command=then_proc.command)
 
 def compare_procs(then_procs: Procs, now_procs: Procs) -> None:
+    lines: Lines = []
+
     for pid, now_proc in now_procs.items():
         then_proc = then_procs.pop(pid, None)
         if then_proc:
-            compare_proc(then_proc, now_proc)
+            compare_proc(lines, then_proc, now_proc)
 
     # Any processes still in then_procs no longer exist.
     # Check for FDs that we previously reported but are now gone.
     for pid, then_proc in then_procs.items():
         for _, then_fd in then_proc.fds.items():
             if then_fd.shown:
-                put('CLOSED - {name} [{command}]',
+                put(lines, 'CLOSED - {name} [{command}]',
                     name=os.path.basename(then_fd.name),
                     command=then_proc.command)
 
-def main() -> None:
+    if lines:
+        print()
+        for line in lines:
+            print(line)
+
+# Inspired by https://github.com/Xfennec/progress/
+
+@click.command()
+@click.option('--seconds', '-s', metavar='N', default=2, show_default=True,
+              help='Time between polls')
+def main(seconds: int = 2) -> None:
+    """
+    Watch processes as they progress through file I/O operations.
+    """
+
     # Don't catch SIGINT to generate KeyboardInterrupt.
     signal.signal(signal.SIGINT, signal.SIG_DFL)
 
-    os.chdir("/proc")
+    os.chdir('/proc')
 
-    sleep = float(OPTS.seconds)
+    sleep = float(seconds)
     now_procs = get_procs()
     while True:
         time.sleep(sleep)
