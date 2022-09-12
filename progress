@@ -198,7 +198,7 @@ def compare_procs(then_procs: Procs, now_procs: Procs) -> None:
 @click.command()
 @click.option('--seconds', '-s', metavar='N', default=2, show_default=True,
               help='Time between polls')
-def main(seconds: int = 2) -> None:
+def main(seconds: int) -> None:
     """
     Watch processes as they progress through file I/O operations.
     """
@@ -216,4 +216,4 @@ def main(seconds: int = 2) -> None:
         now_procs = get_procs()
         compare_procs(then_procs, now_procs)
 
-main()
+main()                          # pylint: disable=no-value-for-parameter
