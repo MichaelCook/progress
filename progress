@@ -189,7 +189,7 @@ def compare_procs(then_procs: Procs, now_procs: Procs) -> None:
                     command=then_proc.command)
 
     if lines:
-        print()
+        print('\r', end='')
         for line in lines:
             print(line)
 
