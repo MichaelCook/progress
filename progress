@@ -1,30 +1,4 @@
 #!/usr/bin/env python3
-
-# This software is distributed under the "Simplified BSD license":
-#
-# Copyright Michael Cook <michael@waxrat.com>. All rights reserved.
-#
-# Redistribution and use in source and binary forms, with or without
-# modification, are permitted provided that the following conditions are met:
-#
-#    1. Redistributions of source code must retain the above copyright notice,
-#       this list of conditions and the following disclaimer.
-#
-#    2. Redistributions in binary form must reproduce the above copyright
-#       notice, this list of conditions and the following disclaimer in the
-#       documentation and/or other materials provided with the distribution.
-#
-# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-# DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
-# FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-# DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
-# SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
-# CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
-# OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-
 import os
 import logging
 import time
@@ -32,12 +6,51 @@ import signal
 from typing import Any
 from stat import S_ISREG, S_ISBLK
 import click
-from mcook import gmk
+from engineering_notation import to_si
 
-Lines = list[str]
+class Columns:
+    """
+    Stores the widths of columns
+    """
+    def __init__(self) -> None:
+        self.widths: list[int] = []
 
-def put(lines: Lines, fmt: str, **kwargs: Any) -> None:
-    lines.append(f'{time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())} {fmt.format(**kwargs)}')
+class Row:
+    """
+    As we call .pad_left and .pad_right to add columns, update the `columns`
+    object to remember the widest each column has been
+
+    """
+
+    def __init__(self, columns: Columns) -> None:
+        self.columns = columns
+        self.column = 0
+
+    def get_width(self, width: int) -> int:
+        widths = self.columns.widths
+        if len(widths) <= self.column:
+            widths.extend([1] * (self.column + 1 - len(widths)))
+        if widths[self.column] < width:
+            widths[self.column] = width
+        else:
+            width = widths[self.column]
+        self.column += 1
+        return width
+
+    def pad_left(self, value: Any) -> str:
+        text = str(value)
+        pads = self.get_width(len(text)) - len(text)
+        return text + ' ' * pads
+
+    def pad_right(self, value: Any) -> str:
+        text = str(value)
+        pads = self.get_width(len(text)) - len(text)
+        return ' ' * pads + text
+
+def put(fmt: str, **kwargs: Any) -> None:
+    timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+    message = fmt.format(**kwargs)
+    print(f'\r{timestamp} {message}')
 
 class File:
     def __init__(self, name: str, pos: int, size: int, timestamp: float) -> None:
@@ -126,7 +139,7 @@ def percentage(n: int, d: int) -> str:
         r = '100%'
     return r
 
-def compare_proc(lines: Lines, then_proc: Process, now_proc: Process) -> None:
+def compare_proc(columns: Columns, then_proc: Process, now_proc: Process) -> None:
     for (fd, dev, ino), now_fd in now_proc.fds.items():
         then_fd = then_proc.fds.pop((fd, dev, ino), None)
         if not then_fd:
@@ -147,7 +160,7 @@ def compare_proc(lines: Lines, then_proc: Process, now_proc: Process) -> None:
         if elapsed != 0:
             bytes_per_sec = (now_fd.pos - now_fd.first_pos) / elapsed
             if bytes_per_sec > 0:
-                rate = gmk(bytes_per_sec) + 'B/s'
+                rate = to_si(bytes_per_sec) + 'B/s'
                 more_bytes = now_fd.size - now_fd.pos
                 if more_bytes > 0:
                     s = int(more_bytes / bytes_per_sec)
@@ -156,42 +169,37 @@ def compare_proc(lines: Lines, then_proc: Process, now_proc: Process) -> None:
         if now_fd.pos == now_fd.size:
             continue
 
-        put(lines, '{perc} {pos} / {size} {rate} {more_time} {name} [{command}]',
-            perc=percentage(now_fd.pos, now_fd.size),
-            rate=rate,
-            more_time=more_time,
-            pos=gmk(now_fd.pos),
-            size=gmk(now_fd.size),
+        row = Row(columns)
+        put('{perc} {pos} / {size} {rate} {more_time} {name} [{command}]',
+            perc=row.pad_right(percentage(now_fd.pos, now_fd.size)),
+            pos=row.pad_right(to_si(now_fd.pos)),
+            size=row.pad_left(to_si(now_fd.size)),
+            rate=row.pad_right(rate),
+            more_time=row.pad_right(more_time),
             name=os.path.basename(now_fd.name),
             command=now_proc.command)
+
     # Any FDs still in then_proc have been closed.
     for (fd, dev, ino), then_fd in then_proc.fds.items():
         if then_fd.shown:
-            put(lines, 'CLOSED - {name} [{command}]',
+            put('CLOSED - {name} [{command}]',
                 name=os.path.basename(then_fd.name),
                 command=then_proc.command)
 
-def compare_procs(then_procs: Procs, now_procs: Procs) -> None:
-    lines: Lines = []
-
+def compare_procs(columns: Columns, then_procs: Procs, now_procs: Procs) -> None:
     for pid, now_proc in now_procs.items():
         then_proc = then_procs.pop(pid, None)
         if then_proc:
-            compare_proc(lines, then_proc, now_proc)
+            compare_proc(columns, then_proc, now_proc)
 
     # Any processes still in then_procs no longer exist.
     # Check for FDs that we previously reported but are now gone.
     for pid, then_proc in then_procs.items():
         for _, then_fd in then_proc.fds.items():
             if then_fd.shown:
-                put(lines, 'CLOSED - {name} [{command}]',
+                put('CLOSED - {name} [{command}]',
                     name=os.path.basename(then_fd.name),
                     command=then_proc.command)
-
-    if lines:
-        print('\r', end='')
-        for line in lines:
-            print(line)
 
 # Inspired by https://github.com/Xfennec/progress/
 
@@ -208,13 +216,14 @@ def main(seconds: int) -> None:
 
     os.chdir('/proc')
 
+    columns = Columns()
     sleep = float(seconds)
     now_procs = get_procs()
     while True:
         time.sleep(sleep)
         then_procs = now_procs
         now_procs = get_procs()
-        compare_procs(then_procs, now_procs)
+        compare_procs(columns, then_procs, now_procs)
 
 if __name__ == '__main__':
     main()                      # pylint: disable=no-value-for-parameter
